@@ -26,6 +26,17 @@ RUN pip install --no-cache-dir ./my_module_service/
 COPY my_module_service/ ./my_module_service/
 ```
 
+## License Acceptance
+
+All images require `ACCEPT_LICENSE=yes` at runtime:
+
+```yaml
+environment:
+  ACCEPT_LICENSE: "yes"
+```
+
+Without it the container prints the license notice and exits.
+
 ## License
 
 PROPRIETARY — CogniWorks. All rights reserved. See [LICENSE](LICENSE).
