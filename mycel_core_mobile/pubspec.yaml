@@ -1,0 +1,26 @@
+name: mycel_core_mobile
+description: Mycel Core - Flutter shell foundation
+version: 0.1.0
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.2.0 <4.0.0'
+  flutter: '>=3.16.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  provider: ^6.1.0
+  http: ^1.2.0
+  shared_preferences: ^2.2.0
+  flutter_secure_storage: ^9.0.0
+  # OpenTelemetry for distributed tracing
+  opentelemetry: ^0.18.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^3.0.0
+
+flutter:
+  uses-material-design: true
