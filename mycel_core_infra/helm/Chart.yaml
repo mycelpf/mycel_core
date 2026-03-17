@@ -1,0 +1,6 @@
+apiVersion: v2
+name: mycel-core
+description: Mycel Core — All four shells (service, web, mcp, mobile) deployed to validate fabric provider integration
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

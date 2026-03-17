@@ -1,0 +1,81 @@
+# mycel_core/infra/helm/values.yaml — SHIPS with release
+#
+# Core deploys ALL four shells to prove integration with fabric providers:
+#   service  → Vault, DB, Temporal, OTel (traces + metrics + logs)
+#   web      → OTel browser tracing, OIDC auth flow via IDP
+#   mcp      → Tool registry, OpenAPI spec serving
+#   mobile   → OTel mobile tracing, OIDC auth flow via IDP
+image:
+  registry: ""
+  pullPolicy: IfNotPresent
+
+artifacts:
+  service:
+    image: mycel_core_service
+    tag: latest
+    targetPort: 3000
+    subdomain: api
+    probe: /health
+    clusterEnv: true
+    labels:
+      egress-tier: external
+    env:
+      ACCEPT_LICENSE: "yes"
+
+  web:
+    image: mycel_core_web
+    tag: latest
+    targetPort: 3002
+    subdomain: ""
+    probe: /
+    serviceUrl: true
+    env:
+      ACCEPT_LICENSE: "yes"
+      VITE_API_BASE_URL: "http://api.core.mycel.test"
+
+  mcp:
+    image: mycel_core_mcp
+    tag: latest
+    targetPort: 3001
+    subdomain: mcp
+    probeType: tcp
+    clusterEnv: true
+    serviceUrl: true
+    labels:
+      egress-tier: external
+    env:
+      ACCEPT_LICENSE: "yes"
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "3001"
+      MCP_TRANSPORT: "streamable-http"
+    extraEnv:
+      - name: ROOT_MODULE_NAME
+        value: mycel_core
+      - name: MCP_REGISTRY_PATH
+        value: /tmp/mcp_registry.json
+
+  mobile:
+    image: mycel_core_mobile
+    tag: latest
+    targetPort: 3003
+    subdomain: mobile
+    probe: /
+    env:
+      ACCEPT_LICENSE: "yes"
+
+ingress:
+  slug: core
+  domain: mycel.test
+  className: traefik
+  tls: false
+  annotations: {}
+
+config:
+  ROOT_MODULE_NAME: mycel_core
+  SUBMODULES: ""
+  LOG_LEVEL: info
+  OTEL_SERVICE_NAME: mycel-core-service
+  VAULT_SECRET_PATHS: "secret/cluster"
+  MCP_URL: "http://mycel-core-mcp"
+
+replicas: 1
