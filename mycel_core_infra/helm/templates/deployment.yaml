@@ -46,8 +46,14 @@ spec:
             - secretRef:
                 name: mycel-cluster-secrets
                 optional: true
+            - secretRef:
+                name: {{ $.Release.Name }}-secrets
+                optional: true
             - configMapRef:
                 name: {{ $.Release.Name }}-config
+            - configMapRef:
+                name: {{ $.Release.Name }}-db-config
+                optional: true
           {{- end }}
           {{- if eq ($art.probeType | default "http") "tcp" }}
           readinessProbe:

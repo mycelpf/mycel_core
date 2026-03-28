@@ -1,7 +1,7 @@
 # mycel_core/infra/helm/values.yaml — SHIPS with release
 #
 # Core deploys ALL four shells to prove integration with fabric providers:
-#   service  → Vault, DB, Temporal, OTel (traces + metrics + logs)
+#   service  → DB, Temporal, OTel (traces + metrics + logs)
 #   web      → OTel browser tracing, OIDC auth flow via IDP
 #   mcp      → Tool registry, OpenAPI spec serving
 #   mobile   → OTel mobile tracing, OIDC auth flow via IDP
@@ -75,7 +75,6 @@ config:
   SUBMODULES: ""
   LOG_LEVEL: info
   OTEL_SERVICE_NAME: mycel-core-service
-  VAULT_SECRET_PATHS: "secret/cluster"
-  MCP_URL: "http://mycel-core-mcp"
+  MCP_URL: "http://mycel-core-mcp/mcp"
 
 replicas: 1
