@@ -5,6 +5,8 @@ image:
 config:
   LOG_LEVEL: debug
 
-artifacts:
-  web:
-    command: ["npx", "vite", "dev", "--host", "--port", "3002"]
+# No artifact-level overrides. Each artifact's Dockerfile CMD runs as-is:
+#   service → `node dist/main.js` (Nest/Fastify)
+#   web     → `node server.js`    (Next.js standalone)
+#   mcp     → `node dist/main.js` (pure Fastify + @modelcontextprotocol/sdk)
+#   mobile  → `node server.js`    (Next.js standalone)

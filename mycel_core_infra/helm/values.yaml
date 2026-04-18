@@ -31,14 +31,13 @@ artifacts:
     serviceUrl: true
     env:
       ACCEPT_LICENSE: "yes"
-      VITE_API_BASE_URL: "http://api.mycel-core.mycel.test"
 
   mcp:
     image: mycel_core_mcp
     tag: latest
     targetPort: 3001
     subdomain: mcp
-    probeType: tcp
+    probe: /healthz
     clusterEnv: true
     serviceUrl: true
     labels:
@@ -46,7 +45,7 @@ artifacts:
     env:
       ACCEPT_LICENSE: "yes"
       MCP_HOST: "0.0.0.0"
-      MCP_PORT: "3001"
+      PORT: "3001"
       MCP_TRANSPORT: "streamable-http"
     extraEnv:
       - name: ROOT_MODULE_NAME

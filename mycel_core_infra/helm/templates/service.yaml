@@ -3,12 +3,24 @@ apiVersion: v1
 kind: Service
 metadata:
   name: {{ $.Release.Name }}-{{ $name }}
+  {{- if $art.loadBalancer }}
+  annotations:
+    # OrbStack exposes LoadBalancer services directly on host ports when
+    # k8s.expose_services is enabled. This bypasses the Traefik ingress
+    # entirely — the service is reachable at http://localhost:<port>.
+    # Only enable for specific artifacts via values override (benchmark /
+    # high-throughput needs), not by default for every service.
+    orbstack.dev/expose: "true"
+  {{- end }}
 spec:
-  type: ClusterIP
+  type: {{ if $art.loadBalancer }}LoadBalancer{{ else }}ClusterIP{{ end }}
   selector:
     app: {{ $.Release.Name }}-{{ $name }}
   ports:
-    - port: 80
+    - port: {{ $art.loadBalancerPort | default 80 }}
       targetPort: {{ $art.targetPort }}
+      {{- if $art.loadBalancer }}
+      protocol: TCP
+      {{- end }}
 ---
 {{- end }}

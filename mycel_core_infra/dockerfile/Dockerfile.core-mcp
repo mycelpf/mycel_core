@@ -1,0 +1,66 @@
+# Mycel core Nest MCP — base image for every downstream MCP module.
+#
+# Mirrors Dockerfile.core-service (Spike A 5-line contract, MIGRATION_NOTES §A).
+# Build context is `mycel_core/` (the module root).
+#
+# Runtime: Nest 11 + Fastify 5 + @modelcontextprotocol/sdk streamable-HTTP at /mcp.
+# No Prisma — MCP server is engine-less, only proxies to downstream HTTP services.
+# Downstream module images: FROM this image, COPY mcp_registry.json to
+# $MCP_REGISTRY_PATH, set MCP_<SERVICE>_CLIENT_ID/SECRET envs as needed.
+
+# ---- Builder stage ----------------------------------------------------------
+FROM node:24-alpine AS builder
+WORKDIR /app
+COPY mycel_core_mcp/package*.json ./
+RUN npm ci --no-audit --no-fund
+COPY mycel_core_mcp/ ./
+RUN npm run build
+
+# ---- Runtime stage — base image for downstream Nest MCP modules ------------
+FROM node:24-alpine
+RUN apk add --no-cache ca-certificates
+RUN addgroup -S -g 1001 appuser \
+ && adduser  -S -u 1001 -G appuser -H -s /sbin/nologin appuser
+WORKDIR /app
+COPY --from=builder --chown=1001:1001 /app/package*.json ./
+# Single RUN so pruned files never commit to a layer. Strips phantom devDeps
+# and docs/sourcemaps/test dirs from the runtime tree.
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+ && npm cache clean --force \
+ && rm -rf \
+      node_modules/typescript \
+      node_modules/@types \
+ && find node_modules \( \
+      -name "*.md" -o \
+      -name "*.ts" -o \
+      -name "*.map" -o \
+      -name "LICENSE*" -o \
+      -name "CHANGELOG*" -o \
+      -name "README*" -o \
+      -name "test" -type d -o \
+      -name "tests" -type d -o \
+      -name "__tests__" -type d \
+    \) -delete 2>/dev/null || true
+COPY --from=builder --chown=1001:1001 /app/dist ./dist
+RUN printf '#!/bin/sh\nif [ "$ACCEPT_LICENSE" != "yes" ]; then\n  echo "========================================================"\n  echo "  PROPRIETARY SOFTWARE — CogniWorks"\n  echo "  You must accept the license to use this software."\n  echo "  Set ACCEPT_LICENSE=yes to accept."\n  echo "  See LICENSE for full terms."\n  echo "========================================================"\n  exit 1\nfi\nexec "$@"\n' > /usr/local/bin/entrypoint.sh \
+ && chmod +x /usr/local/bin/entrypoint.sh
+USER appuser
+ENV NODE_ENV=production \
+    PORT=3001 \
+    MCP_HOST=0.0.0.0 \
+    MCP_TRANSPORT=streamable-http \
+    MCP_REGISTRY_PATH=/tmp/mcp_registry.json \
+    NODE_OPTIONS="--max-old-space-size=384" \
+    NODE_COMPILE_CACHE=/tmp/.node-compile-cache
+EXPOSE 3001
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:'+process.env.PORT+'/healthz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+LABEL org.opencontainers.image.source="https://github.com/cogniworks/mycel_core" \
+      org.opencontainers.image.description="Mycel core Nest MCP base image" \
+      org.opencontainers.image.vendor="CogniWorks" \
+      org.opencontainers.image.licenses="LicenseRef-Proprietary" \
+      mycel.artifact.type="mcp" \
+      mycel.platform.runtime="nest-fastify-mcp" \
+      mycel.base.distro="alpine"
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["node", "dist/main.js"]

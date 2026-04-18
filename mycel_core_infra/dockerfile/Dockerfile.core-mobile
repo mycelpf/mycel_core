@@ -1,0 +1,39 @@
+# mycel_core/infra/dockerfile/Dockerfile.core-mobile
+#
+# Runtime-only image for mycel_core mobile shell.
+# Flutter web is pre-built on the host; this image just serves the output.
+
+# ---- Runtime stage ----
+FROM node:20-slim
+
+LABEL org.opencontainers.image.title="mycel_core_mobile" \
+      org.opencontainers.image.description="Mycel mobile shell base image. PROPRIETARY — CogniWorks. Set ACCEPT_LICENSE=yes to use." \
+      org.opencontainers.image.licenses="LicenseRef-Proprietary" \
+      org.opencontainers.image.vendor="CogniWorks" \
+      org.opencontainers.image.source="https://github.com/mycelpf/mycel_core"
+
+RUN npm install -g serve@latest
+WORKDIR /app
+COPY mycel_core_mobile/build/web/ .
+
+# License
+COPY LICENSE ./LICENSE
+COPY <<'ENTRYPOINT' /usr/local/bin/entrypoint.sh
+#!/bin/sh
+if [ "$ACCEPT_LICENSE" != "yes" ]; then
+  echo "========================================================"
+  echo "  PROPRIETARY SOFTWARE — CogniWorks"
+  echo "  You must accept the license to use this software."
+  echo "  Set ACCEPT_LICENSE=yes to accept."
+  echo "  See LICENSE for full terms."
+  echo "========================================================"
+  exit 1
+fi
+exec "$@"
+ENTRYPOINT
+RUN chmod +x /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+EXPOSE 3003
+USER node
+CMD ["serve", "-s", ".", "-l", "3003"]

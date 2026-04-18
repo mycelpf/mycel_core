@@ -16,6 +16,13 @@ spec:
         {{- toYaml . | nindent 8 }}
         {{- end }}
     spec:
+      {{- if $art.hostNetwork }}
+      # hostNetwork: true — pod uses the node's (OrbStack VM's) network
+      # namespace directly, skipping kube-proxy + the pod netns entirely.
+      # Dev-loop only — breaks if multiple pods need the same host port.
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      {{- end }}
       containers:
         - name: {{ $name }}
           image: "{{ $.Values.image.registry }}{{ $art.image }}:{{ $art.tag | default "latest" }}"

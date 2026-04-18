@@ -1,0 +1,106 @@
+# mycel_core/infra/dev/docker-compose.yml
+#
+# Integration test: all 3 core shells against mycel_fabric providers.
+# No hot reload — rebuild images on code change.
+#
+# Prerequisites: fabric providers running on mycel_network
+#   cd mycel_fabric/mycel_fabric_providers/mycel_app_db/infra   && docker compose --env-file ../../.env up -d
+#   cd mycel_fabric/mycel_fabric_providers/mycel_idp/infra       && docker compose --env-file ../../.env up -d
+#   cd mycel_fabric/mycel_fabric_providers/mycel_temporal/infra  && docker compose --env-file ../../.env up -d
+#   cd mycel_fabric/mycel_fabric_providers/mycel_monitoring/infra && docker compose --env-file ../../.env up -d
+#
+# Usage:
+#   docker compose build
+#   docker compose up -d
+
+name: mycel_core
+
+services:
+  mycel_core_service:
+    image: mycel-core-service
+    container_name: mycel_core_service
+    build:
+      context: ../../..
+      dockerfile: infra/dockerfile/Dockerfile.core-service_py
+    ports:
+      - "${SERVICE_PORT}:3000"
+    env_file:
+      - .env
+      - path: .env.secrets
+        required: false
+    environment:
+      ACCEPT_LICENSE: "yes"
+      ROOT_MODULE_NAME: ${ROOT_MODULE_NAME}
+      SUBMODULES: ${SUBMODULES}
+      PYTHONPATH: /app/core:/app
+      PYTHONUNBUFFERED: "1"
+      PYTHONOPTIMIZE: ${PYTHONOPTIMIZE}
+      LOG_LEVEL: ${LOG_LEVEL}
+      SERVICE_NAME: ${SERVICE_NAME}
+      SERVICE_VERSION: ${SERVICE_VERSION}
+      OTEL_SERVICE_NAME: ${OTEL_SERVICE_NAME}
+      CORS_ORIGINS: http://localhost:${WEB_PORT}
+      # Fabric providers (container names on mycel_network)
+      DATABASE_HOST: ${DATABASE_HOST}
+      DATABASE_PORT: ${DATABASE_PORT}
+      KEYCLOAK_URL: ${KEYCLOAK_URL}
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM}
+      OTEL_ENABLED: ${OTEL_ENABLED}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT}
+      OTEL_EXPORTER_OTLP_HTTP_ENDPOINT: ${OTEL_EXPORTER_OTLP_HTTP_ENDPOINT}
+      TEMPORAL_HOST: ${TEMPORAL_HOST}
+      LOKI_URL: ${LOKI_URL}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    networks:
+      - mycel_network
+
+  mycel_core_web:
+    image: mycel-core-web
+    container_name: mycel_core_web
+    build:
+      context: ../../..
+      dockerfile: infra/dockerfile/Dockerfile.core-web
+    ports:
+      - "${WEB_PORT}:3002"
+    environment:
+      ACCEPT_LICENSE: "yes"
+      SERVICE_URL: http://mycel_core_service:3000
+    # Core web base has no built dist/ — use vite dev to serve the shell
+    command: ["npx", "vite", "dev", "--host", "--port", "3002"]
+    depends_on:
+      - mycel_core_service
+    networks:
+      - mycel_network
+
+  mycel_core_mcp:
+    image: mycel-core-mcp
+    container_name: mycel_core_mcp
+    build:
+      context: ../../..
+      dockerfile: infra/dockerfile/Dockerfile.core-mcp_py
+    ports:
+      - "${MCP_PORT}:3001"
+    environment:
+      ACCEPT_LICENSE: "yes"
+      ROOT_MODULE_NAME: ${ROOT_MODULE_NAME}
+      MCP_REGISTRY_PATH: /tmp/mcp_registry.json
+      SERVICE_URL: http://mycel_core_service:3000
+      MCP_HOST: 0.0.0.0
+      MCP_PORT: "3001"
+      MCP_TRANSPORT: streamable-http
+    # Seed empty registry for core standalone (no downstream tools)
+    command: >
+      sh -c "echo '{\"version\":\"0.1.0\",\"built_at\":\"2026-01-01T00:00:00Z\",\"spec_hash\":\"core-standalone\",\"services\":[]}' > /tmp/mcp_registry.json && python -m src.server"
+    depends_on:
+      - mycel_core_service
+    networks:
+      - mycel_network
+
+networks:
+  mycel_network:
+    name: mycel_network
+    external: true

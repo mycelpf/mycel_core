@@ -1,0 +1,64 @@
+# mycel_core/infra/dockerfile/Dockerfile.core-mcp
+#
+# Base image for mycel MCP modules.
+# Contains: python 3.12 + mcp/httpx + core MCP server src + compile scripts.
+# Module Dockerfiles: FROM this image, copy module mcp_config.py + registry.
+# Startup: pre-compiled registry or live-compile from service OpenAPI.
+
+FROM python:3.12-slim
+
+LABEL org.opencontainers.image.title="mycel_core_mcp" \
+      org.opencontainers.image.description="Base image for mycel MCP modules. PROPRIETARY — CogniWorks. Set ACCEPT_LICENSE=yes to use." \
+      org.opencontainers.image.licenses="LicenseRef-Proprietary" \
+      org.opencontainers.image.vendor="CogniWorks" \
+      org.opencontainers.image.source="https://github.com/mycelpf/mycel_core"
+
+RUN useradd -m -u 1000 appuser
+WORKDIR /app
+
+RUN pip install --no-cache-dir mcp httpx
+COPY mycel_core_mcp/src ./src/
+COPY mycel_core_mcp/scripts ./mcp_scripts/
+COPY --chown=appuser:appuser mycel_core_mcp/mcp_registry.json /tmp/mcp_registry.json
+
+# Compile server source to .pyc, promote to package level, strip .py.
+# Scripts stay as .py — invoked by downstream containers.
+# SourcelessFileLoader only finds .pyc at the package level, not inside __pycache__/.
+RUN find ./src/ -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; \
+    python -OO -m compileall -q ./src/ \
+    && find ./src/ -path '*/__pycache__/*.pyc' | while read pyc; do \
+         dir="$(dirname "$(dirname "$pyc")")"; \
+         base="$(basename "$pyc" | sed 's/\.cpython-[0-9]*\.\{0,1\}\(opt-[0-9]*\.\)\{0,1\}pyc/.pyc/')"; \
+         cp "$pyc" "$dir/$base"; \
+       done \
+    && find ./src/ -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null; true \
+    && find ./src/ -name "*.py" -type f -delete
+
+# License
+COPY LICENSE ./LICENSE
+
+# License acceptance gate — inherited by module images.
+COPY <<'ENTRYPOINT' /usr/local/bin/entrypoint.sh
+#!/bin/sh
+if [ "$ACCEPT_LICENSE" != "yes" ]; then
+  echo "========================================================"
+  echo "  PROPRIETARY SOFTWARE — CogniWorks"
+  echo "  You must accept the license to use this software."
+  echo "  Set ACCEPT_LICENSE=yes to accept."
+  echo "  See LICENSE for full terms."
+  echo "========================================================"
+  exit 1
+fi
+exec "$@"
+ENTRYPOINT
+RUN chmod +x /usr/local/bin/entrypoint.sh
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+
+ENV MCP_REGISTRY_PATH=/tmp/mcp_registry.json
+ENV PYTHONOPTIMIZE=2
+ENV MCP_HOST=0.0.0.0
+ENV MCP_PORT=3001
+ENV MCP_TRANSPORT=streamable-http
+EXPOSE 3001
+USER appuser
+CMD ["python", "-m", "src.server"]

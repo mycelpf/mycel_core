@@ -1,0 +1,104 @@
+# Mycel core Nest service — base image for every downstream Nest module.
+#
+# Follows the Spike A 5-line contract (SPIKE_A_NEST_DOCKERFILE.md §7) and the
+# durable decision in MIGRATION_NOTES §A: canonical Dockerfile location is
+# `<module>/<module>_infra/dockerfile/Dockerfile.<artifact>`. Build context is
+# `mycel_core/` (the module root); `COPY mycel_core_service/...` resolves to
+# `mycel_core/mycel_core_service/...`.
+#
+# Base image: node:24-alpine (~60 MB vs node:22-slim ~92 MB). Alpine uses
+# musl libc, so Prisma needs `linux-musl-arm64-openssl-3.0.x` /
+# `linux-musl-openssl-3.0.x` binary targets — see prisma/schema.prisma.
+#
+# User: uid 1001 (NOT 1000 — node:24-alpine ships a pre-existing `node` user
+# at uid 1000). See SPIKE_A §6 gotcha #1.
+#
+# PID 1: we `CMD ["node", ...]` directly. Node 20+ handles SIGTERM correctly,
+# so `tini` is not required. `app.enableShutdownHooks()` in main.ts traps
+# SIGTERM and runs Nest's onModuleDestroy hooks before exit.
+
+# ---- Builder stage ----------------------------------------------------------
+FROM node:24-alpine AS builder
+# OpenSSL + ca-certificates for Prisma engine detection during `prisma generate`.
+RUN apk add --no-cache openssl ca-certificates
+WORKDIR /app
+COPY mycel_core_service/package*.json ./
+COPY mycel_core_service/prisma ./prisma
+# `npm ci` triggers postinstall (`prisma generate`); prisma/schema.prisma
+# must exist at this point, hence the COPY above.
+RUN npm ci --no-audit --no-fund
+COPY mycel_core_service/ ./
+RUN npm run build
+
+# ---- Runtime stage — base image for downstream Nest services ---------------
+FROM node:24-alpine
+# OpenSSL required by Prisma client engine at runtime. Alpine ships openssl 3
+# in `openssl` + `libcrypto3`; `libstdc++` is required by the Prisma musl
+# query engine native module.
+RUN apk add --no-cache openssl ca-certificates libstdc++
+RUN addgroup -S -g 1001 appuser \
+ && adduser  -S -u 1001 -G appuser -H -s /sbin/nologin appuser
+WORKDIR /app
+COPY --from=builder --chown=1001:1001 /app/package*.json ./
+COPY --from=builder --chown=1001:1001 /app/prisma       ./prisma
+# `--ignore-scripts` suppresses postinstall (`prisma generate`) because the
+# prisma CLI is a devDep and isn't installed with `--omit=dev`. We copy the
+# pre-generated client from the builder stage below instead.
+# Single RUN so pruned files never commit to a layer. Prisma 7 with the
+# driver-adapter pattern is engine-less (no Rust libquery_engine) but pulls
+# in ~130 MB of JS chaff as transitive deps of @prisma/client: Studio UI
+# components (studio-core ~38 MB, dev ~15 MB, react + react-dom ~15 MB,
+# effect ~10 MB) + an embedded pglite Postgres (~19 MB) with tar.gz fixtures
+# for every Postgres extension. NONE of this is used at runtime — verified
+# empirically: `require('@prisma/client').PrismaClient({ adapter })` loads
+# fine after removal. Also strips phantom devDeps (typescript, @types) +
+# docs/sourcemaps/test dirs.
+RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund \
+ && npm cache clean --force \
+ && rm -rf \
+      node_modules/typescript \
+      node_modules/@types \
+      node_modules/@prisma/studio-core \
+      node_modules/@prisma/dev \
+      node_modules/@prisma/query-plan-executor \
+      node_modules/@electric-sql \
+      node_modules/react \
+      node_modules/react-dom \
+      node_modules/effect \
+ && find node_modules \( \
+      -name "*.md" -o \
+      -name "*.ts" -o \
+      -name "*.map" -o \
+      -name "LICENSE*" -o \
+      -name "CHANGELOG*" -o \
+      -name "README*" -o \
+      -name "test" -type d -o \
+      -name "tests" -type d -o \
+      -name "__tests__" -type d \
+    \) -delete 2>/dev/null || true
+COPY --from=builder --chown=1001:1001 /app/node_modules/.prisma ./node_modules/.prisma
+COPY --from=builder --chown=1001:1001 /app/dist                 ./dist
+RUN printf '#!/bin/sh\nif [ "$ACCEPT_LICENSE" != "yes" ]; then\n  echo "========================================================"\n  echo "  PROPRIETARY SOFTWARE — CogniWorks"\n  echo "  You must accept the license to use this software."\n  echo "  Set ACCEPT_LICENSE=yes to accept."\n  echo "  See LICENSE for full terms."\n  echo "========================================================"\n  exit 1\nfi\nexec "$@"\n' > /usr/local/bin/entrypoint.sh \
+ && chmod +x /usr/local/bin/entrypoint.sh
+USER appuser
+ENV NODE_ENV=production \
+    PORT=3000 \
+    # Cap heap at 384 MiB — the shell is not memory-hungry, and capping
+    # prevents runaway OOM in misbehaving downstream modules. Also disables
+    # `--enable-source-maps` to skip source-map resolution cost on throws.
+    NODE_OPTIONS="--max-old-space-size=384" \
+    # V8 compile cache: caches bytecode between restarts. First boot writes,
+    # subsequent restarts read, shaving ~30% off cold start.
+    NODE_COMPILE_CACHE=/tmp/.node-compile-cache
+EXPOSE 3000
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:'+process.env.PORT+'/healthz', r => process.exit(r.statusCode === 200 ? 0 : 1)).on('error', () => process.exit(1))"
+LABEL org.opencontainers.image.source="https://github.com/cogniworks/mycel_core" \
+      org.opencontainers.image.description="Mycel core Nest service base image" \
+      org.opencontainers.image.vendor="CogniWorks" \
+      org.opencontainers.image.licenses="LicenseRef-Proprietary" \
+      mycel.artifact.type="service" \
+      mycel.platform.runtime="nest-fastify" \
+      mycel.base.distro="alpine"
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["node", "dist/main.js"]

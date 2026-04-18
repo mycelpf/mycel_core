@@ -1,0 +1,92 @@
+# mycel_core/mycel_core_infra/dockerfile/Dockerfile.core-web
+#
+# Base image for mycel_core_web — Next.js 16 App Router shell.
+#
+# Publishes TWO tagged images via the `--target` flag (see
+# scripts/build-core-web.sh):
+#   1. mycel_core_web:${VER}          (target: runtime)  — thin standalone output
+#   2. mycel_core_web-builder:${VER}  (target: builder)  — full source + next CLI
+#
+# Downstream modules (mycel_iam, mycel_enterprise, mycel_vera_*) compose their
+# pages into the core shell by inheriting from the -builder image, installing
+# themselves via npm `file:` dep into /app/node_modules, setting
+# MYCEL_REGISTRY_PATH + MYCEL_TRANSPILE_MODULES, and re-running `next build`.
+# Their runtime stage then extracts the new standalone output — yielding one
+# module image per app, all sharing the same core shell code.
+#
+# Build strategy: Next.js `output: 'standalone'` (see next.config.ts) produces
+# a self-contained `.next/standalone` tree that includes only the Node files
+# needed to run the server + the minimized node_modules subset the production
+# runtime actually imports. This lets the runtime stage ship without a full
+# node_modules copy — dramatically smaller images than a plain `next start`.
+#
+# Runtime: `node server.js` directly (the file `.next/standalone/server.js`
+# is Next.js's generated standalone entry). No `next start`, no `@nestjs/cli`,
+# no build tooling in the runtime image.
+#
+# Base: node:24-alpine — musl libc, ~60 MB base layer. Matches mycel_core_service.
+#
+# Port convention: web listens on PORT 3002 (Prism 04_module_system
+# port_base+1). K8s Service targetPort = 3002 to match (see Helm values.yaml).
+#
+# User: uid 1001 (NOT 1000 — node:24-alpine ships a `node` user at uid 1000).
+#
+# Build context: `mycel_core/` (the module root). `COPY mycel_core_web/...`
+# resolves to `mycel_core/mycel_core_web/...`.
+
+# ---- Builder stage ----------------------------------------------------------
+FROM node:24-alpine AS builder
+WORKDIR /app
+# Install deps first for layer caching — changes to src don't bust the
+# node_modules layer.
+COPY mycel_core_web/package*.json ./
+RUN npm ci --no-audit --no-fund
+# Then the source. Everything else (next.config.ts, app/, src/, public/,
+# tsconfig.json) is copied in one shot.
+COPY mycel_core_web/ ./
+# `next build` emits .next/standalone, .next/static, and a server.js entry
+# point. TypeScript type-check runs as part of next build.
+RUN npm run build
+
+# ---- Runtime stage — minimal Node server + Next.js standalone output ---------
+# Build both stages explicitly:
+#   docker build --target builder -t ghcr.io/mycelpf/mycel_core_web-builder:${VER} .
+#   docker build --target runtime -t ghcr.io/mycelpf/mycel_core_web:${VER}         .
+# The builder stage is what downstream modules inherit FROM to compose their
+# pages into the core shell via MYCEL_REGISTRY_PATH + file: dep install.
+FROM node:24-alpine AS runtime
+# No apt packages needed — web is pure JS, no Prisma, no native modules.
+RUN addgroup -S -g 1001 appuser \
+ && adduser  -S -u 1001 -G appuser -H -s /sbin/nologin appuser
+WORKDIR /app
+
+# Copy only the standalone tree + the static assets + public/.
+# `.next/standalone` contains a pre-minified node_modules subset + server.js.
+# `.next/static` must live at `/app/.next/static` (standalone server looks
+# there). `public/` is served verbatim.
+COPY --from=builder --chown=1001:1001 /app/public             ./public
+COPY --from=builder --chown=1001:1001 /app/.next/standalone   ./
+COPY --from=builder --chown=1001:1001 /app/.next/static       ./.next/static
+RUN printf '#!/bin/sh\nif [ "$ACCEPT_LICENSE" != "yes" ]; then\n  echo "========================================================"\n  echo "  PROPRIETARY SOFTWARE — CogniWorks"\n  echo "  You must accept the license to use this software."\n  echo "  Set ACCEPT_LICENSE=yes to accept."\n  echo "  See LICENSE for full terms."\n  echo "========================================================"\n  exit 1\nfi\nexec "$@"\n' > /usr/local/bin/entrypoint.sh \
+ && chmod +x /usr/local/bin/entrypoint.sh
+
+USER appuser
+ENV NODE_ENV=production \
+    PORT=3002 \
+    HOSTNAME=0.0.0.0 \
+    # Heap cap — prevents runaway memory. Web is I/O-bound, 384 MiB is plenty.
+    NODE_OPTIONS="--max-old-space-size=384" \
+    # V8 bytecode cache between restarts.
+    NODE_COMPILE_CACHE=/tmp/.node-compile-cache
+EXPOSE 3002
+HEALTHCHECK --interval=30s --timeout=3s --start-period=10s --retries=3 \
+  CMD node -e "require('http').get('http://localhost:'+process.env.PORT+'/', r => process.exit(r.statusCode >= 200 && r.statusCode < 400 ? 0 : 1)).on('error', () => process.exit(1))"
+LABEL org.opencontainers.image.source="https://github.com/cogniworks/mycel_core" \
+      org.opencontainers.image.description="Mycel core Next.js web base image" \
+      org.opencontainers.image.vendor="CogniWorks" \
+      org.opencontainers.image.licenses="LicenseRef-Proprietary" \
+      mycel.artifact.type="web" \
+      mycel.platform.runtime="nextjs-standalone" \
+      mycel.base.distro="alpine"
+ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
+CMD ["node", "server.js"]
